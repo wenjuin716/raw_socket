@@ -105,6 +105,21 @@ int UnwantedMessage (void const * memory, size_t extent, uint8_t MMV, uint16_t M
 {
 //  extern const byte localcast [ETHER_ADDR_LEN];
   struct homeplug * homeplug = (struct homeplug *)(memory);
+  fprintf(stderr, "dmac=%02x:%02x:%02x:%02x:%02x:%02x\n", 
+    homeplug->ethernet.h_dest[0],
+    homeplug->ethernet.h_dest[1],
+    homeplug->ethernet.h_dest[2],
+    homeplug->ethernet.h_dest[3],
+    homeplug->ethernet.h_dest[4],
+    homeplug->ethernet.h_dest[5]);
+  fprintf(stderr, "smac=%02x:%02x:%02x:%02x:%02x:%02x\n", 
+    homeplug->ethernet.h_source[0],
+    homeplug->ethernet.h_source[1],
+    homeplug->ethernet.h_source[2],
+    homeplug->ethernet.h_source[3],
+    homeplug->ethernet.h_source[4],
+    homeplug->ethernet.h_source[5]);
+  fprintf(stderr, "ethtype=0x%04x\n", homeplug->ethernet.h_proto);
   if (!extent){
     fprintf(stderr,"%s:%d extend is 0.\n",__FUNCTION__,__LINE__);
     return (-1);
@@ -208,33 +223,36 @@ int recvpacket(int sk){
   unsigned char message[256];
   unsigned int len=0;
 
-  /* recv homeplug response from raw socket . */
-  FD_ZERO(&rfds);
-  FD_SET(0, &rfds);
+  for(;;){
+    /* recv homeplug response from raw socket . */
+    FD_ZERO(&rfds);
+    FD_SET(0, &rfds);
 
-  /* Wait up to 0.5 seconds. */
-  tv.tv_sec = 0;
-  tv.tv_usec = 500000;	/* 0.5s */
+    /* Wait up to 0.5 seconds. */
+    tv.tv_sec = 0;
+    tv.tv_usec = 500000;	/* 0.5s */
 
-  retval = select(1, &rfds, NULL, NULL, &tv);
-  /* Don't rely on the value of tv now! */
+    retval = select(1, &rfds, NULL, NULL, &tv);
+    /* Don't rely on the value of tv now! */
 
-  if (retval == -1){
-    fprintf(stderr, "select failed: %s\n", strerror(errno));
-    goto err;
-  }else if (retval){
-    printf("Data is available now.\n");
-    /* FD_ISSET(0, &rfds) will be true. */
-    memset(message, 0x0, sizeof(message));
-    len=recv(sk, message, sizeof(message), 0);
-    if(len>0){
-
+    if (retval == -1){
+      fprintf(stderr, "select failed: %s\n", strerror(errno));
+      goto err;
+    }else if (retval){
+      printf("Data is available now.\n");
+      /* FD_ISSET(0, &rfds) will be true. */
+      memset(message, 0x0, sizeof(message));
+      len=recv(sk, message, sizeof(message), 0);
+      if(len>0){
+        if(UnwantedMessage (message, len, 0, (VS_SW_VER | MMTYPE_CNF))){
+          continue;
+        }
+      }
+    }else{
+       fprintf(stderr, "No data within five seconds.\n");
+       goto err;
     }
-  }else{
-     fprintf(stderr, "No data within five seconds.\n");
-     goto err;
   }
-
   return 0;
 err:
   return -1;
