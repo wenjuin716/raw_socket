@@ -21,29 +21,50 @@
 #define MMTYPE_REQ 0x0000
 #define MMTYPE_CNF 0x0001
 
-#if 0
-#define ETHERMTU 1500
-
-/*
- * Some basic Ethernet constants.
- */
-#define ETHER_ADDR_LEN          6       /* length of an Ethernet address */
-#define ETHER_TYPE_LEN          2       /* length of the Ethernet type field */
-#define ETHER_CRC_LEN           4       /* length of the Ethernet CRC */
-#define ETHER_HDR_LEN           (ETHER_ADDR_LEN*2+ETHER_TYPE_LEN)
-#define ETHER_MIN_LEN           64      /* minimum frame len, including CRC */
-#define ETHER_MAX_LEN           1518    /* maximum frame len, including CRC */
-#define ETHER_MAX_LEN_JUMBO     9018    /* max jumbo frame len, including CRC */
-#endif
+#define SWAP16(i)  ( ((i<<8)&0xFF00) | (((uint16_t)i >> 8)&0x00FF ))
 
 uint8_t const localcast [ETHER_ADDR_LEN]={0x00,0xB0,0x52,0x00,0x00,0x01};
 
-struct qualcomm_std
+struct __attribute__((packed)) qualcomm_std
 {
   unsigned char MMV;
   unsigned short MMTYPE;
   unsigned char OUI [ETHER_ADDR_LEN >> 1];
-} __attribute__((packed));
+};
+
+typedef struct __attribute__((packed)) homeplug_fmi 
+{
+  uint8_t MMV;
+  uint16_t MMTYPE;
+#if 0 
+  uint8_t FMID;
+  uint8_t FMSN;
+#else
+  uint8_t FMSN;
+  uint8_t FMID;
+#endif
+}homeplug_fmi;
+
+typedef struct __attribute__((packed)) homeplug 
+{
+  struct ethhdr ethernet;
+  struct homeplug_fmi homeplug;
+  uint8_t content [ETHERMTU - sizeof (struct homeplug_fmi)];
+}HOMEPLUG;
+
+struct __attribute__((packed)) qualcomm_fmi 
+{
+  uint8_t MMV;
+  uint16_t MMTYPE;
+#if 0 
+  uint8_t FMID;
+  uint8_t FMSN;
+#else
+  uint8_t FMSN;
+  uint8_t FMID;
+#endif
+  uint8_t OUI [ETHER_ADDR_LEN >> 1];
+};
 
 int read_interface(char *interface, int *ifindex, unsigned char *arp)
 {
@@ -80,6 +101,78 @@ int read_interface(char *interface, int *ifindex, unsigned char *arp)
   return 0;
 }
 
+int UnwantedMessage (void const * memory, size_t extent, uint8_t MMV, uint16_t MMTYPE) 
+{
+//  extern const byte localcast [ETHER_ADDR_LEN];
+  struct homeplug * homeplug = (struct homeplug *)(memory);
+  if (!extent){
+    fprintf(stderr,"%s:%d extend is 0.\n",__FUNCTION__,__LINE__);
+    return (-1);
+  }
+  if (extent < (ETHER_MIN_LEN - ETHER_CRC_LEN)){
+    fprintf(stderr,"%s:%d extend is less than 60.\n",__FUNCTION__,__LINE__);
+    return (-1);
+  }
+  if (extent > (ETHER_MAX_LEN)){
+    fprintf(stderr,"%s:%d extend is larger than 1518.\n",__FUNCTION__,__LINE__);
+    return (-1);
+  }
+  if (homeplug->ethernet.h_proto != htons (HOMEPLUG_MTYPE)){
+    fprintf(stderr,"%s:%d eth type is not matched.\n",__FUNCTION__,__LINE__);
+    return (-1);
+  }
+  if (homeplug->homeplug.MMV != MMV){
+    fprintf(stderr,"%s:%d MMV is not matched.\n",__FUNCTION__,__LINE__);
+    return (-1);
+  }
+  if (homeplug->homeplug.MMV == 0){
+    struct qualcomm_std * qualcomm = (struct qualcomm_std *)(&homeplug->homeplug);
+    if (SWAP16(qualcomm->MMTYPE) != MMTYPE){
+  	  fprintf(stderr,"%s:%d MMTYPE is not matched.\n",__FUNCTION__,__LINE__);
+  	  return (-1);
+    }
+    if ((MMTYPE < VS_MMTYPE_MIN) || (MMTYPE > VS_MMTYPE_MAX)){
+    }
+    else if (memcmp (localcast, qualcomm->OUI, sizeof (qualcomm->OUI))){
+      fprintf(stderr,"%s:%d OUI is not matched.\n",__FUNCTION__,__LINE__);
+      return (-1);
+    }
+  }
+  if (homeplug->homeplug.MMV == 1){
+    struct qualcomm_fmi * qualcomm = (struct qualcomm_fmi *)(&homeplug->homeplug);
+  
+#if FMI  
+    static unsigned total = 0;
+    static unsigned index = 0;
+    static unsigned count = 0;  
+#endif
+  
+    if (SWAP16(qualcomm->MMTYPE) != MMTYPE){		
+  	  fprintf(stderr,"%s:%d MMTYPE is not matched.\n",__FUNCTION__,__LINE__);
+  	  return (-1);
+    }
+  
+#if FMI  
+    index = qualcomm->FMID >> 0 & 0x0F;
+    if (!index){
+      total = qualcomm->FMID >> 4 & 0x0F;
+      count = qualcomm->FMID >> 0 & 0x0F;
+      if (memcmp (localcast, qualcomm->OUI, sizeof (qualcomm->OUI))){
+        return (-1);
+      }
+    }
+    if (index != count){
+      return (-1);
+    }
+    if (count > total){  
+      return (-1);
+    }
+    count++;
+#endif  
+  }
+  return (0);
+}
+
 void sendpacket(int sk, unsigned char *mac){
   unsigned char message[256];
   unsigned int len=0;
@@ -97,7 +190,7 @@ void sendpacket(int sk, unsigned char *mac){
   request->header.h_proto=htons(HOMEPLUG_MTYPE);
 
   request->qca_hdr.MMV=0x0;
-  request->qca_hdr.MMTYPE=(VS_SW_VER | MMTYPE_REQ);
+  request->qca_hdr.MMTYPE=SWAP16(VS_SW_VER | MMTYPE_REQ);
   request->qca_hdr.OUI[0]=0x00;
   request->qca_hdr.OUI[1]=0xB0;
   request->qca_hdr.OUI[2]=0x52;
@@ -106,6 +199,45 @@ void sendpacket(int sk, unsigned char *mac){
   if(len <= 0){
     fprintf(stderr, "send socket failed: %s\n", strerror(errno));
   }
+}
+
+int recvpacket(int sk){
+  fd_set rfds;
+  struct timeval tv;
+  int retval;
+  unsigned char message[256];
+  unsigned int len=0;
+
+  /* recv homeplug response from raw socket . */
+  FD_ZERO(&rfds);
+  FD_SET(0, &rfds);
+
+  /* Wait up to 0.5 seconds. */
+  tv.tv_sec = 0;
+  tv.tv_usec = 500000;	/* 0.5s */
+
+  retval = select(1, &rfds, NULL, NULL, &tv);
+  /* Don't rely on the value of tv now! */
+
+  if (retval == -1){
+    fprintf(stderr, "select failed: %s\n", strerror(errno));
+    goto err;
+  }else if (retval){
+    printf("Data is available now.\n");
+    /* FD_ISSET(0, &rfds) will be true. */
+    memset(message, 0x0, sizeof(message));
+    len=recv(sk, message, sizeof(message), 0);
+    if(len>0){
+
+    }
+  }else{
+     fprintf(stderr, "No data within five seconds.\n");
+     goto err;
+  }
+
+  return 0;
+err:
+  return -1;
 }
 
 int main(int argc, char **argv){

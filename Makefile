@@ -1,6 +1,6 @@
 EXEC = raw_sock
 OBJS = 
-CC = gcc
+#CC = gcc
 CFLAGS += -Werror
 
 all: $(OBJS) main.c
@@ -11,3 +11,6 @@ all: $(OBJS) main.c
 
 clean:
 	rm -rf *.o $(EXEC)
+
+romfs:
+	$(ROMFSINST) /bin/$(EXEC)
