@@ -242,14 +242,14 @@ int recvpacket(int sk){
       printf("Data is available now.\n");
       /* FD_ISSET(0, &rfds) will be true. */
       memset(message, 0x0, sizeof(message));
-      len=recv(sk, message, sizeof(message), 0);
+      len=read(sk, message, sizeof(message));
       if(len>0){
         if(UnwantedMessage (message, len, 0, (VS_SW_VER | MMTYPE_CNF))){
           continue;
         }
       }
     }else{
-       fprintf(stderr, "No data within five seconds.\n");
+       fprintf(stderr, "No data within %d.%d seconds.\n", tv.tv_sec, tv.tv_usec);
        goto err;
     }
   }
