@@ -142,7 +142,8 @@ int UnwantedMessage (void const * memory, size_t extent, uint8_t MMV, uint16_t M
   }
   if (homeplug->homeplug.MMV == 0){
     struct qualcomm_std * qualcomm = (struct qualcomm_std *)(&homeplug->homeplug);
-    if (SWAP16(qualcomm->MMTYPE) != MMTYPE){
+
+    if (qualcomm->MMTYPE != MMTYPE){
   	  fprintf(stderr,"%s:%d MMTYPE is not matched.\n",__FUNCTION__,__LINE__);
   	  return (-1);
     }
@@ -163,8 +164,8 @@ int UnwantedMessage (void const * memory, size_t extent, uint8_t MMV, uint16_t M
 #endif
   
     if (SWAP16(qualcomm->MMTYPE) != MMTYPE){		
-  	  fprintf(stderr,"%s:%d MMTYPE is not matched.\n",__FUNCTION__,__LINE__);
-  	  return (-1);
+      fprintf(stderr,"%s:%d MMTYPE is not matched.\n",__FUNCTION__,__LINE__);
+      return (-1);
     }
   
 #if FMI  
@@ -188,11 +189,21 @@ int UnwantedMessage (void const * memory, size_t extent, uint8_t MMV, uint16_t M
   return (0);
 }
 
-void sendpacket(int sk, unsigned char *mac){
+void sendpacket(unsigned char *ifname){
+  int sk;
   unsigned char message[256];
   unsigned int len=0;
 //  struct ethhdr header;
 //  struct qualcomm_std qca_hdr;
+  struct sockaddr_ll sadr_ll;
+  sk=socket(AF_PACKET,SOCK_RAW,htons(HOMEPLUG_MTYPE));
+  if(sk<0)
+  {
+    fprintf(stderr, "create socket failed: %s\n", strerror(errno));
+  }
+
+  read_interface(ifname, &sadr_ll.sll_ifindex, sadr_ll.sll_addr); 
+  sadr_ll.sll_halen = ETH_ALEN;
 
   struct __attribute__((packed)) vs_sw_ver_request
   {
@@ -201,7 +212,7 @@ void sendpacket(int sk, unsigned char *mac){
   }* request = (struct vs_sw_ver_request *) (message);
 
   memcpy(request->header.h_dest, localcast, sizeof(request->header.h_dest));
-  memcpy(request->header.h_source, mac, sizeof(request->header.h_source));
+  memcpy(request->header.h_source, sadr_ll.sll_addr, sizeof(request->header.h_source));
   request->header.h_proto=htons(HOMEPLUG_MTYPE);
 
   request->qca_hdr.MMV=0x0;
@@ -210,29 +221,41 @@ void sendpacket(int sk, unsigned char *mac){
   request->qca_hdr.OUI[1]=0xB0;
   request->qca_hdr.OUI[2]=0x52;
 
-  len=send(sk, message, (ETHER_MIN_LEN - ETHER_CRC_LEN), 0);
+  // send to
+  len=sendto(sk, message, (ETHER_MIN_LEN - ETHER_CRC_LEN), 0, (const struct sockaddr*)&sadr_ll, sizeof(struct sockaddr_ll));
   if(len <= 0){
     fprintf(stderr, "send socket failed: %s\n", strerror(errno));
   }
 }
 
-int recvpacket(int sk){
+int recvpacket(void){
+  int sk;
   fd_set rfds;
   struct timeval tv;
   int retval;
   unsigned char message[256];
   unsigned int len=0;
+  struct sockaddr saddr;
+  int saddr_len = sizeof(saddr);
+
+  fprintf(stderr,"[%s] Enter\n", __FUNCTION__);
+  sk=socket(AF_PACKET,SOCK_RAW, htons(HOMEPLUG_MTYPE));
+  if(sk<0)
+  {
+    fprintf(stderr, "create socket failed: %s\n", strerror(errno));
+    return -1;
+  }
 
   for(;;){
     /* recv homeplug response from raw socket . */
     FD_ZERO(&rfds);
-    FD_SET(0, &rfds);
+    FD_SET(sk, &rfds);
 
     /* Wait up to 0.5 seconds. */
-    tv.tv_sec = 0;
+    tv.tv_sec = 10;
     tv.tv_usec = 500000;	/* 0.5s */
 
-    retval = select(1, &rfds, NULL, NULL, &tv);
+    retval = select(sk+1, &rfds, NULL, NULL, &tv);
     /* Don't rely on the value of tv now! */
 
     if (retval == -1){
@@ -246,13 +269,18 @@ int recvpacket(int sk){
       if(len>0){
         if(UnwantedMessage (message, len, 0, (VS_SW_VER | MMTYPE_CNF))){
           continue;
+        }else{
+          break;
         }
+      }else{
+        fprintf(stderr, "len(%d) <= 0\n", len);
       }
     }else{
-       fprintf(stderr, "No data within %d.%d seconds.\n", tv.tv_sec, tv.tv_usec);
+       fprintf(stderr, "No data within five seconds.\n");
        goto err;
     }
   }
+
   return 0;
 err:
   return -1;
@@ -260,33 +288,8 @@ err:
 
 int main(int argc, char **argv){
 
-  int sk;
-  struct sockaddr_ll sock;
-  unsigned char mac[6];
-
-  //sock=socket(AF_PACKET,SOCK_RAW,htons(ETH_P_ALL));
-  sk=socket(AF_PACKET,SOCK_RAW,htons(HOMEPLUG_MTYPE));
-  if(sk<0)
-  {
-    fprintf(stderr, "create socket failed: %s\n", strerror(errno));
-    return -1;
-  }
-
-  sock.sll_family = AF_PACKET;
-  sock.sll_protocol = htons(HOMEPLUG_MTYPE);
-//  sock.sll_ifindex = ifindex;
-  read_interface(argv[1], &sock.sll_ifindex, mac);
-  if (bind(sk, (struct sockaddr *) &sock, sizeof(sock)) < 0) {
-    fprintf(stderr, "bind call failed: %s\n", strerror(errno));
-    close(sk);
-    return -1;
-  }
-
-  fprintf(stderr, "ifname=%s, mac=%02x:%02x:%02x:%02x:%02x:%02x\n", argv[1], 
-    mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-
-  sendpacket(sk, mac);
-  recvpacket(sk);
+  sendpacket(argv[1]);
+  recvpacket();
 
   return 0;
 }
